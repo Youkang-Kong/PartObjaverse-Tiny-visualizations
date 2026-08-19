@@ -177,6 +177,18 @@ def linked_model_viewers(mesh_file: str, colored_mesh_file: str, uid: str) -> No
                 }}
                 link(left, right);
                 link(right, left);
+
+                // Render both faces of every triangle so thin/open meshes
+                // don't show holes or see-through backfaces.
+                function makeDoubleSided(viewer) {{
+                    viewer.addEventListener("load", () => {{
+                        for (const material of viewer.model.materials) {{
+                            material.setDoubleSided(true);
+                        }}
+                    }});
+                }}
+                makeDoubleSided(left);
+                makeDoubleSided(right);
             </script>
             """,
         height=430,
