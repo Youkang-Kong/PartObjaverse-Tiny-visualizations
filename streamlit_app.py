@@ -12,6 +12,7 @@ from utils import (
     get_label_set as _get_label_set,
     MESHES_DIR,
     COLORED_MESHES_DIR,
+    INSTANCE_COLORED_MESHES_DIR,
     SEMANTIC_GT_DIR,
     THUMBNAILS_DIR,
     download_colored_meshes,
@@ -30,6 +31,7 @@ STATIC_DIR = "static"
 os.makedirs(STATIC_DIR, exist_ok=True)
 MESHES_PATH = os.path.join(STATIC_DIR, MESHES_DIR)
 COLORED_MESHES_PATH = os.path.join(STATIC_DIR, COLORED_MESHES_DIR)
+INSTANCE_COLORED_MESHES_PATH = os.path.join(STATIC_DIR, INSTANCE_COLORED_MESHES_DIR)
 SEMANTIC_GT_PATH = os.path.join(".", SEMANTIC_GT_DIR)
 THUMBNAILS_PATH = os.path.join(STATIC_DIR, THUMBNAILS_DIR)
 NUM_VIEWS = 4  # rendered views per model (see render_thumbnails.py)
@@ -122,6 +124,7 @@ def render_pagination(page_select: int, max_pages: int) -> None:
 def display_sample_cell(uid: str, part_labels: list[str]) -> None:
     mesh_file = os.path.join(MESHES_PATH, f"{uid}.glb")
     colored_mesh_file = os.path.join(COLORED_MESHES_PATH, f"{uid}.glb")
+    instance_mesh_file = os.path.join(INSTANCE_COLORED_MESHES_PATH, f"{uid}.glb")
     thumb_files = [
         os.path.join(THUMBNAILS_PATH, f"{uid}_{i}.png") for i in range(NUM_VIEWS)
     ]
@@ -129,7 +132,7 @@ def display_sample_cell(uid: str, part_labels: list[str]) -> None:
 
     with st.container(border=True):
         st.markdown(f"**UID:** {uid}")
-        linked_model_viewers(mesh_file, colored_mesh_file, uid)
+        linked_model_viewers(mesh_file, colored_mesh_file, instance_mesh_file, uid)
 
         info_cols = st.columns([3, 2])
         with info_cols[0]:
@@ -246,12 +249,29 @@ def legend_entry(color: str, label: str) -> str:
         """
 
 
-def linked_model_viewers(mesh_file: str, colored_mesh_file: str, uid: str) -> None:
+def linked_model_viewers(
+    mesh_file: str, colored_mesh_file: str, instance_mesh_file: str, uid: str
+) -> None:
     # Two model-viewers whose cameras stay in sync: dragging or scrolling one
-    # updates the other. We disable auto-rotate so manual control is authoritative.
+    # updates the other. The right viewer can toggle between semantic- and
+    # instance-colored meshes; the camera is preserved across the swap.
     safe_id = uid.replace("-", "_")
     left_id = f"mv_left_{safe_id}"
     right_id = f"mv_right_{safe_id}"
+    btn_id = f"toggle_{safe_id}"
+    has_instance = os.path.exists(instance_mesh_file)
+    toggle_html = (
+        f"""
+                <button id="{btn_id}" style="position: absolute; top: 8px; right: 8px;
+                        z-index: 5; padding: 4px 10px; font-size: 12px; cursor: pointer;
+                        border: none; border-radius: 6px; background: #374151; color: #fff;
+                        font-family: sans-serif;">
+                    Semantic
+                </button>
+        """
+        if has_instance
+        else ""
+    )
     html(
         f"""
             <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
@@ -259,9 +279,12 @@ def linked_model_viewers(mesh_file: str, colored_mesh_file: str, uid: str) -> No
                 <model-viewer id="{left_id}" src="app/{mesh_file}" alt="3D Model" camera-controls interaction-prompt="none"
                               style="width: 384px; height: 384px; background-color: #1f2937; border-radius: 8px;">
                 </model-viewer>
-                <model-viewer id="{right_id}" src="app/{colored_mesh_file}" alt="3D Model" camera-controls interaction-prompt="none"
-                              style="width: 384px; height: 384px; background-color: #1f2937; border-radius: 8px;">
-                </model-viewer>
+                <div style="position: relative; width: 384px; height: 384px;">
+                    <model-viewer id="{right_id}" src="app/{colored_mesh_file}" alt="3D Model" camera-controls interaction-prompt="none"
+                                  style="width: 384px; height: 384px; background-color: #1f2937; border-radius: 8px;">
+                    </model-viewer>
+                    {toggle_html}
+                </div>
             </div>
             <script type="module">
                 const left = document.getElementById("{left_id}");
@@ -296,6 +319,31 @@ def linked_model_viewers(mesh_file: str, colored_mesh_file: str, uid: str) -> No
                 }}
                 makeDoubleSided(left);
                 makeDoubleSided(right);
+
+                // Toggle the right viewer between semantic and instance coloring,
+                // keeping the current camera on the swapped-in model.
+                const btn = document.getElementById("{btn_id}");
+                if (btn) {{
+                    const sources = {{
+                        Semantic: "app/{colored_mesh_file}",
+                        Instance: "app/{instance_mesh_file}",
+                    }};
+                    let mode = "Semantic";
+                    btn.addEventListener("click", () => {{
+                        mode = mode === "Semantic" ? "Instance" : "Semantic";
+                        btn.textContent = mode;
+                        const orbit = right.getCameraOrbit().toString();
+                        const target = right.getCameraTarget().toString();
+                        const fov = right.getFieldOfView() + "deg";
+                        right.src = sources[mode];
+                        right.addEventListener("load", () => {{
+                            right.cameraOrbit = orbit;
+                            right.cameraTarget = target;
+                            right.fieldOfView = fov;
+                            right.jumpCameraToGoal();
+                        }}, {{ once: true }});
+                    }});
+                }}
             </script>
             """,
         height=430,
