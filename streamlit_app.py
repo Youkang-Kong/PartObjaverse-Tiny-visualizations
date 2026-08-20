@@ -2,6 +2,7 @@ import logging
 import os
 
 import streamlit as st
+from PIL import Image
 from streamlit.components.v1 import html
 
 from utils import (
@@ -12,6 +13,7 @@ from utils import (
     MESHES_DIR,
     COLORED_MESHES_DIR,
     SEMANTIC_GT_DIR,
+    THUMBNAILS_DIR,
     download_colored_meshes,
 )
 
@@ -29,6 +31,8 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 MESHES_PATH = os.path.join(STATIC_DIR, MESHES_DIR)
 COLORED_MESHES_PATH = os.path.join(STATIC_DIR, COLORED_MESHES_DIR)
 SEMANTIC_GT_PATH = os.path.join(".", SEMANTIC_GT_DIR)
+THUMBNAILS_PATH = os.path.join(STATIC_DIR, THUMBNAILS_DIR)
+NUM_VIEWS = 4  # rendered views per model (see render_thumbnails.py)
 
 
 def main() -> None:
@@ -118,16 +122,119 @@ def render_pagination(page_select: int, max_pages: int) -> None:
 def display_sample_cell(uid: str, part_labels: list[str]) -> None:
     mesh_file = os.path.join(MESHES_PATH, f"{uid}.glb")
     colored_mesh_file = os.path.join(COLORED_MESHES_PATH, f"{uid}.glb")
+    thumb_files = [
+        os.path.join(THUMBNAILS_PATH, f"{uid}_{i}.png") for i in range(NUM_VIEWS)
+    ]
+    thumb_files = [f for f in thumb_files if os.path.exists(f)]
 
     with st.container(border=True):
         st.markdown(f"**UID:** {uid}")
         linked_model_viewers(mesh_file, colored_mesh_file, uid)
-        legend_html = "<div style='max-height: 200px; overflow-y: auto; font-size: 12px; columns: 2;'>"
-        for label_idx, part_label in enumerate(part_labels):
-            color = COLORS[label_idx % len(COLORS)]
-            legend_html += legend_entry(color, part_label)
-        legend_html += "</div>"
-        st.html(legend_html)
+
+        info_cols = st.columns([3, 2])
+        with info_cols[0]:
+            if thumb_files:
+                thumbnail_row_with_dialog(thumb_files, uid)
+        with info_cols[1]:
+            legend_html = (
+                "<div style='max-height: 200px; overflow-y: auto; "
+                "font-size: 12px; columns: 2;'>"
+            )
+            for label_idx, part_label in enumerate(part_labels):
+                color = COLORS[label_idx % len(COLORS)]
+                legend_html += legend_entry(color, part_label)
+            legend_html += "</div>"
+            st.html(legend_html)
+
+
+# Semi-transparent checkerboard, so the rendered PNG's transparent background
+# reads as "transparent" rather than plain white.
+_CHECKER_CSS = (
+    "background-color: #fff;"
+    "background-image:"
+    "linear-gradient(45deg, #d9d9d9 25%, transparent 25%),"
+    "linear-gradient(-45deg, #d9d9d9 25%, transparent 25%),"
+    "linear-gradient(45deg, transparent 75%, #d9d9d9 75%),"
+    "linear-gradient(-45deg, transparent 75%, #d9d9d9 75%);"
+    "background-size: 16px 16px;"
+    "background-position: 0 0, 0 8px, 8px -8px, -8px 0;"
+)
+
+
+def thumbnail_row_with_dialog(thumb_files: list[str], uid: str) -> None:
+    """A row of clickable thumbnails; clicking one opens a full-page lightbox.
+
+    Uses a pure-CSS :target lightbox (no JS), so it survives st.html
+    sanitization and can overlay the entire page.
+    """
+    safe_id = uid.replace("-", "_")
+
+    thumbs_html = ""
+    boxes_html = ""
+    for i, thumb_file in enumerate(thumb_files):
+        try:
+            with Image.open(thumb_file) as im:
+                width, height = im.size
+        except Exception:
+            width, height = 0, 0
+        resolution = f"{width}×{height}"
+        src = f"app/{thumb_file}"
+        box_id = f"lb_{safe_id}_{i}"
+
+        thumbs_html += f"""
+            <div style="text-align: center;">
+                <a href="#{box_id}">
+                    <img src="{src}" alt="view {i}"
+                         style="width: 82px; height: 82px; object-fit: contain;
+                                border-radius: 6px; cursor: zoom-in; {_CHECKER_CSS}" />
+                </a>
+                <div style="font-size: 10px; color: #9ca3af; margin-top: 1px;">
+                    {resolution}
+                </div>
+            </div>
+        """
+        boxes_html += f"""
+            <div id="{box_id}" class="lb">
+                <a href="#" class="lb-bg"></a>
+                <div class="lb-inner">
+                    <img src="{src}" alt="enlarged view {i}" />
+                    <div class="lb-cap">
+                        {resolution} &nbsp;·&nbsp; click outside to close
+                    </div>
+                </div>
+            </div>
+        """
+
+    st.html(
+        f"""
+        <style>
+            .lb {{
+                display: none; position: fixed; inset: 0; z-index: 9999;
+                align-items: center; justify-content: center;
+                background: rgba(0, 0, 0, 0.7);
+            }}
+            .lb:target {{ display: flex; }}
+            .lb .lb-bg {{ position: absolute; inset: 0; }}
+            .lb .lb-inner {{
+                position: relative; border-radius: 10px; padding: 12px;
+                max-width: 92vw; max-height: 92vh; {_CHECKER_CSS}
+            }}
+            .lb .lb-inner img {{
+                display: block; max-width: 84vw; max-height: 82vh;
+                width: auto; height: auto;
+            }}
+            .lb .lb-cap {{
+                text-align: center; margin-top: 6px; font-family: sans-serif;
+                font-size: 12px; color: #374151;
+            }}
+        </style>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;
+                    font-family: sans-serif;">
+            {thumbs_html}
+        </div>
+        {boxes_html}
+        """
+    )
 
 
 def legend_entry(color: str, label: str) -> str:
